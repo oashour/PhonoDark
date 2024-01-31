@@ -277,12 +277,13 @@ def calc_diff_rates_SI(mass, q_XYZ_list, G_XYZ_list, jacob_list, physics_paramet
 
     m_cell = sum(phonopy_params['atom_masses'])
     
-    [ph_eigenvectors_delta_E, ph_omega_delta_E] = phonopy_funcs.run_phonopy(phonon_file, 
-                [[0., 0., 0.]])
-    
-    max_delta_E = 4*np.amax(ph_omega_delta_E)
+    max_delta_E = 4*np.amax(mesh.compute_omega_ph_max(phonon_file))
+    #print('max_delta_E')
+    #print(max_delta_E)
 
     max_bin_num = math.floor((max_delta_E-threshold)/energy_bin_width) + 1
+    #print('max_bin_num')
+    #print(max_bin_num)
 
     diff_rate = np.zeros(max_bin_num, dtype=complex)
     binned_rate = np.zeros(phonopy_params['num_modes'], dtype=complex)
