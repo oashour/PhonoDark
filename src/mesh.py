@@ -99,19 +99,27 @@ def jacobian_func(q_max, a, b, c, power_a, power_b, power_c, threshold, special_
     return jacob
 
 
+def compute_omega_ph_max(phonon_file, mesh=[20,20,20]):
+    """
+        Returns omega_ph_max = max(omega_ph) if there are optical modes, otherwise returns the average over the entire Brillouin zone. The quantities are obviously not the same but should be the same order. See theoretical framework paper, paragraph in middle of page 24 (of published version). 
+    """
+
+    if phonon_file.primitive.get_number_of_atoms() == 1:
+        phonon_file.run_mesh(mesh)
+        mesh_dict = phonon_file.get_mesh_dict()
+        weights = mesh_dict['weights']
+        omega = 2*const.PI*(const.THz_To_eV)*mesh_dict['frequencies']
+        return np.mean(np.average(omega, axis=0, weights=weights))
+    else:
+        phonon_file.run_mesh([1,1,1])
+        return np.amax(phonon_file.get_mesh_dict()['frequencies'])
+
 def compute_q_cut(phonon_file, atom_masses):
     """
-        Returns q = 10*sqrt(max(m)*max(omega))
+        Returns q = 10*sqrt(max(m)*max(omega)) or q = 10*sqrt(max(m)*avg(omega)) depending on whether there are optical modes or not. 
     """
 
-    [ph_eigenvectors, ph_omega] = phonopy_funcs.run_phonopy(
-                                                            phonon_file,
-                                                            np.array([[0, 0, 0]])
-                                                            )
-
-    q_cut = 10.0*np.sqrt(np.amax(atom_masses)*np.amax(ph_omega))
-
-    return q_cut
+    return 10.0*np.sqrt(np.amax(atom_masses)*compute_omega_ph_max(phonon_file))
 
 def create_q_mesh_uniform(mass, threshold, vE_vec, numerics_parameters, phonon_file, atom_masses, 
         delta, mesh=[9,9,9], 
