@@ -45,6 +45,7 @@ def load_phonopy_file(material, io_parameters, supercell, poscar_path, force_set
                         proc_id = 0, root_process = 0):
 
 
+    yaml = os.path.exists(io_parameters['material_data_folder']+material+'/phonopy.yaml')
     if os.path.exists(io_parameters['material_data_folder']+material+'/BORN'):
 
         born_exists = True
@@ -58,29 +59,32 @@ def load_phonopy_file(material, io_parameters, supercell, poscar_path, force_set
 
         born_exists = False
 
-    if born_exists: 
-
-        phonon_file = phonopy.load(
-                            supercell_matrix    = supercell,
-                            primitive_matrix    = 'auto',
-                            unitcell_filename   = poscar_path,
-                            force_sets_filename = force_sets_path,
-                            is_nac              = True,
-                            born_filename       = born_path
-                           )
-
+    if yaml:
+        phonon_file = phonopy.load(phonopy_yaml="phonopy.yaml", is_nac=False)
     else:
+        if born_exists: 
 
-        if proc_id == root_process:
+            phonon_file = phonopy.load(
+                                supercell_matrix    = supercell,
+                                primitive_matrix    = 'auto',
+                                unitcell_filename   = poscar_path,
+                                force_sets_filename = force_sets_path,
+                                is_nac              = True,
+                                born_filename       = born_path
+                            )
 
-            print('\tNo BORN file found for : '+material)
+        else:
 
-        phonon_file = phonopy.load(
-                            supercell_matrix    = supercell_data[material],
-                            primitive_matrix    = 'auto',
-                            unitcell_filename   = poscar_path,
-                            force_sets_filename = force_sets_path
-                           )
+            if proc_id == root_process:
+
+                print('\tNo BORN file found for : '+material)
+
+            phonon_file = phonopy.load(
+                                supercell_matrix    = supercell_data[material],
+                                primitive_matrix    = 'auto',
+                                unitcell_filename   = poscar_path,
+                                force_sets_filename = force_sets_path
+                            )
 
     return [phonon_file, born_exists]
 
@@ -117,6 +121,7 @@ def get_phonon_file_data(phonon_file, born_exists):
 
     """
 
+    bohr2ang = 0.529177249 
     num_atoms = phonon_file.primitive.get_number_of_atoms()
     num_modes = 3*num_atoms 
 
@@ -124,10 +129,14 @@ def get_phonon_file_data(phonon_file, born_exists):
     Z_list = phonon_file.primitive.get_atomic_numbers()
 
     eq_positions_XYZ = const.Ang_To_inveV*phonon_file.primitive.get_positions()
+    if phonon_file.calculator == 'qe':
+        eq_positions_XYZ *= bohr2ang
 
     atom_masses = const.AMU_To_eV*phonon_file.primitive.get_masses()
 
     primitive_mat = phonon_file.primitive.get_cell()
+    if phonon_file.calculator == 'qe':
+        eq_positions_XYZ *= bohr2ang
 
     pos_red_to_XYZ = const.Ang_To_inveV*np.transpose(primitive_mat)
     pos_XYZ_to_red = np.linalg.inv(pos_red_to_XYZ)
