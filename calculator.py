@@ -9,13 +9,13 @@
 
         - inputs/
             - material/
-                - (material name)/ 
+                - (material name)/
                     (material_info).py - set the material parameters such as nucleon numbers and spins
             - numerics/
                 (numerics_info).py - list of numerics parameters
             - physics_model/
                 (physics_model_info).py - parameters defining the scattering potential
-                    
+
 
     Created by : Tanner Trickle, Zhengkang Zhang
 """
@@ -28,7 +28,7 @@ import sys
 import optparse
 
 import src.constants as const
-import src.parallel_util as put 
+import src.parallel_util as put
 import src.mesh as mesh
 import src.phonopy_funcs as phonopy_funcs
 import src.physics as physics
@@ -39,6 +39,7 @@ import src.hdf5_output as hdf5_output
 version = "1.1.0"
 
 # initializing MPI
+print('Getting comm')
 comm = MPI.COMM_WORLD
 
 # total number of processors
@@ -51,6 +52,10 @@ proc_id = comm.Get_rank()
 root_process = 0
 
 if proc_id == root_process:
+    print('Got comm and size and everything.')
+    print('------------')
+
+if proc_id == root_process:
 
     print('\n--- Dark Matter - Phonon Scattering Rate Calculator ---\n')
     print('  version: '+version+'\n')
@@ -61,11 +66,11 @@ if proc_id == root_process:
 cwd = os.getcwd()
 
 parser = optparse.OptionParser()
-parser.add_option('-m', action="store", default="", 
+parser.add_option('-m', action="store", default="",
         help="Material info file. Contains the crystal lattice degrees of freedom for a given material.")
-parser.add_option('-p', action="store", default="", 
+parser.add_option('-p', action="store", default="",
         help="Physics model input. Contains the coupling coefficients and defines which operators enter the scattering potential.")
-parser.add_option('-n', action="store", default="", 
+parser.add_option('-n', action="store", default="",
         help="Numerics input. Sets the parameters used for the integration over momentum space and the input and output files.")
 
 options_in, args = parser.parse_args()
@@ -91,9 +96,9 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
     physics_model_input = options['p']
     numerics_input = options['n']
 
-    mat_input_mod_name = os.path.splitext(os.path.basename(material_input))[0] 
-    phys_input_mod_name = os.path.splitext(os.path.basename(physics_model_input))[0] 
-    num_input_mod_name = os.path.splitext(os.path.basename(numerics_input))[0] 
+    mat_input_mod_name = os.path.splitext(os.path.basename(material_input))[0]
+    phys_input_mod_name = os.path.splitext(os.path.basename(physics_model_input))[0]
+    num_input_mod_name = os.path.splitext(os.path.basename(numerics_input))[0]
 
     mat_mod = import_file(mat_input_mod_name, os.path.join(cwd, material_input))
     phys_mod = import_file(phys_input_mod_name, os.path.join(cwd, physics_model_input))
@@ -141,7 +146,7 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
     if proc_id == root_process:
 
         print('Configuring calculation ...\n')
-        
+
         # number of jobs to do
         num_masses    = len(phys_mod.dm_properties_dict['mass_list'])
         num_times     = len(phys_mod.physics_parameters['times'])
@@ -159,9 +164,14 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
         job_list = put.generate_job_list(n_proc, np.array(total_job_list))
 
+    if proc_id == root_process:
+        print('Going to scatter')
     # scatter the job list
     job_list_recv = comm.scatter(job_list, root=root_process)
-    
+    if proc_id == root_process:
+        print('Done scattering!!!')
+        print('----------')
+
     diff_rate_list   = []
     binned_rate_list = []
     total_rate_list  = []
@@ -170,7 +180,7 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
         print('Done configuring calculation\n\n------\n')
         print('Loading DFT files ...\n')
-            
+
     material = mat_mod.material
 
     # load phonon file
@@ -183,31 +193,48 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
     born_path = os.path.join(
             os.path.split(material_input)[0], 'BORN'
             )
+    yaml_path = os.path.join(
+            os.path.split(material_input)[0], 'phonopy.yaml'
+            )
 
-    # check if the born file exists
-    if os.path.exists(born_path):
+    if os.path.exists(yaml_path):
+        if proc_id == root_process:
+            print("YAML file exists, loading from it.")
+            print("Assuming that YAML contains NAC info and setting born_exists = True")
+        # Need to modify to work with NAC at some point...
         born_exists = True
+        phonon_file = phonopy.load(phonopy_yaml=yaml_path, is_nac=True)
     else:
-        if proc_id == root_process: 
-            print('  There is no BORN file for '+material+'. PHONOPY calculations will process with .NAC. = FALSE\n')
-        born_exists = False
 
-    if born_exists: 
-        phonon_file = phonopy.load(
-                        supercell_matrix    = mat_mod.mat_properties_dict['supercell_dim'],
-                        primitive_matrix    = 'auto',
-                        unitcell_filename   = poscar_path,
-                        force_sets_filename = force_sets_path,
-                        is_nac              = True,
-                        born_filename       = born_path
-                       )
-    else:
-        phonon_file = phonopy.load(
+        if proc_id == root_process:
+            print("YAML file does not exist, loading from POSCAR, FORCE_SETS, and BORN files.")
+        # check if the born file exists
+        if os.path.exists(born_path):
+            born_exists = True
+        else:
+            if proc_id == root_process:
+                print('  There is no BORN file for '+material+'. PHONOPY calculations will process with .NAC. = FALSE\n')
+            born_exists = False
+        if born_exists:
+            if proc_id == root_process:
+                print("BORN exists, loading NAC from there")
+            phonon_file = phonopy.load(
                             supercell_matrix    = mat_mod.mat_properties_dict['supercell_dim'],
                             primitive_matrix    = 'auto',
                             unitcell_filename   = poscar_path,
-                            force_sets_filename = force_sets_path
-                           )
+                            force_sets_filename = force_sets_path,
+                            is_nac              = True,
+                            born_filename       = born_path
+                        )
+        else:
+            if proc_id == root_process:
+                print("BORN exists, loading NAC from there")
+            phonon_file = phonopy.load(
+                                supercell_matrix    = mat_mod.mat_properties_dict['supercell_dim'],
+                                primitive_matrix    = 'auto',
+                                unitcell_filename   = poscar_path,
+                                force_sets_filename = force_sets_path
+                            )
     if proc_id == root_process:
         print('\nDone loading DFT files\n\n------\n')
         print('Starting rate computation ...\n')
@@ -234,13 +261,13 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
                 print('    Number of atoms : '+str(phonopy_params['num_atoms'])+'\n')
                 print('    Number of modes : '+str(phonopy_params['num_modes'])+'\n')
                 print('    Atom masses : '+str(phonopy_params['atom_masses'])+'\n')
-            
+
             if born_exists and proc_id == root_process and first_job:
-                
+
                 print('    dielectric : \n')
                 print(phonopy_params['dielectric'])
                 print()
-            
+
             if not phys_mod.include_screen:
                 if proc_id == root_process:
                     print('  Include screen is FALSE. Setting the dielectric to the identity.\n')
@@ -256,9 +283,9 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
             delta = 2*phys_mod.physics_parameters['power_V'] - 2*phys_mod.physics_parameters['Fmed_power']
 
-            [q_XYZ_list, jacob_list] = mesh.create_q_mesh(mass, 
-                                           phys_mod.physics_parameters['threshold'], 
-                                           vE_vec, 
+            [q_XYZ_list, jacob_list] = mesh.create_q_mesh(mass,
+                                           phys_mod.physics_parameters['threshold'],
+                                           vE_vec,
                                            num_mod.numerics_parameters,
                                            phonon_file,
                                            phonopy_params['atom_masses'],
@@ -266,13 +293,13 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
             # Beta testing a uniform q mesh for different calculations...
 
-            # [q_XYZ_list, jacob_list] = mesh.create_q_mesh_uniform(mass, 
-            #                                phys_mod.physics_parameters['threshold'], 
-            #                                vE_vec, 
+            # [q_XYZ_list, jacob_list] = mesh.create_q_mesh_uniform(mass,
+            #                                phys_mod.physics_parameters['threshold'],
+            #                                vE_vec,
             #                                num_mod.numerics_parameters,
             #                                phonon_file,
             #                                phonopy_params['atom_masses'],
-            #                                delta, 
+            #                                delta,
             #                                q_red_to_XYZ = phonopy_params['recip_red_to_XYZ'],
             #                                mesh = [20, 20, 20]
             #                                )
@@ -282,14 +309,18 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
             # run phonopy
             [ph_eigenvectors, ph_omega] = phonopy_funcs.run_phonopy(phonon_file, k_red_list)
+            #print("Eigenvectors")
+            #print(ph_eigenvectors)
+            #print("Eigenvalues")
+            #print(ph_omega)
 
             # compute W tensor
             W_tensor = physics.calculate_W_tensor(phonon_file,
                                                        phonopy_params['num_atoms'],
                                                        phonopy_params['atom_masses'],
-                                                       num_mod.numerics_parameters['n_DW_x'], 
-                                                       num_mod.numerics_parameters['n_DW_y'], 
-                                                       num_mod.numerics_parameters['n_DW_z'], 
+                                                       num_mod.numerics_parameters['n_DW_x'],
+                                                       num_mod.numerics_parameters['n_DW_y'],
+                                                       num_mod.numerics_parameters['n_DW_z'],
                                                        phonopy_params['recip_red_to_XYZ'])
 
             # compute the differential, binned and total rates
@@ -305,19 +336,19 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
                 if phys_mod.physics_parameters['special_model'] == 'SI':
 
                     [diff_rate, binned_rate, total_rate] = physics.calc_diff_rates_SI(
-                                                    mass, 
-                                                    q_XYZ_list, 
-                                                    G_XYZ_list, 
-                                                    jacob_list, 
+                                                    mass,
+                                                    q_XYZ_list,
+                                                    G_XYZ_list,
+                                                    jacob_list,
                                                     phys_mod.physics_parameters,
-                                                    vE_vec, 
-                                                    num_mod.numerics_parameters, 
+                                                    vE_vec,
+                                                    num_mod.numerics_parameters,
                                                     phonopy_params,
-                                                    ph_omega, 
+                                                    ph_omega,
                                                     ph_eigenvectors,
-                                                    W_tensor, 
-                                                    mat_mod.mat_properties_dict, 
-                                                    phys_mod.dm_properties_dict, 
+                                                    W_tensor,
+                                                    mat_mod.mat_properties_dict,
+                                                    phys_mod.dm_properties_dict,
                                                     phonon_file, phys_mod.c_dict)
 
 
@@ -332,20 +363,20 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
             else:
 
-                [diff_rate, binned_rate, total_rate] = physics.calc_diff_rates_general(mass, 
-                                                    q_XYZ_list, 
-                                                    G_XYZ_list, 
-                                                    jacob_list, 
+                [diff_rate, binned_rate, total_rate] = physics.calc_diff_rates_general(mass,
+                                                    q_XYZ_list,
+                                                    G_XYZ_list,
+                                                    jacob_list,
                                                     phys_mod.physics_parameters,
-                                                    vE_vec, 
-                                                    num_mod.numerics_parameters, 
+                                                    vE_vec,
+                                                    num_mod.numerics_parameters,
                                                     phonopy_params,
-                                                    ph_omega, 
+                                                    ph_omega,
                                                     ph_eigenvectors,
-                                                    W_tensor, 
-                                                    phys_mod.c_dict, 
-                                                    mat_mod.mat_properties_dict, 
-                                                    phys_mod.dm_properties_dict, 
+                                                    W_tensor,
+                                                    phys_mod.c_dict,
+                                                    mat_mod.mat_properties_dict,
+                                                    phys_mod.dm_properties_dict,
                                                     phys_mod.c_dict_form, phonon_file)
 
             diff_rate_list.append([job_list_recv[job], np.real(diff_rate)])
@@ -354,8 +385,12 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
             first_job = False
 
+    print(f'********** Done computing rate on {proc_id}.')
     if proc_id == root_process:
         print('Done computing rate. Returning all data to root node to write.\n\n------\n')
+    comm.Barrier()
+    if proc_id == root_process:
+        print('<------> Done on all processes, going to gather')
 
     # return data back to root
     all_diff_rate_list   = comm.gather(diff_rate_list, root=root_process)
@@ -364,18 +399,20 @@ if options['m'] != '' and options['p'] != '' and options['n'] != '':
 
     # write to output file
     if proc_id == root_process:
+        print('Done gathering!!!')
+        print('----------')
 
         out_filename = os.path.join(
-                num_mod.io_parameters['output_folder'], 
+                num_mod.io_parameters['output_folder'],
                 material+'_'+phys_input_mod_name+'_'+num_input_mod_name+num_mod.io_parameters['output_filename_extra']+'.hdf5')
-        
+
         hdf5_output.hdf5_write_output(out_filename,
                                        num_mod.numerics_parameters,
                                        phys_mod.physics_parameters,
                                        phys_mod.dm_properties_dict,
                                        phys_mod.c_dict,
                                        all_total_rate_list,
-                                       n_proc, 
+                                       n_proc,
                                        material,
                                        all_diff_rate_list,
                                        all_binned_rate_list)
