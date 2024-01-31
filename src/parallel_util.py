@@ -15,20 +15,20 @@ def generate_job_list(n_proc, total_job_list):
 
     if n_jobs > n_proc:
 
-        n_extra_jobs = n_jobs // n_proc 
+        n_jobs_per_proc = int(np.ceil(n_jobs/n_proc))
 
         print('  Number of jobs is greater than the the number of processors.')
         print()
-        print('  Number of jobs per processor  = '+str(n_extra_jobs))
+        print('  Number of jobs per processor  = '+str(n_jobs_per_proc))
         print()
 
-        job_list = np.zeros((n_proc, 1 + n_extra_jobs, len_job))
+        job_list = np.zeros((n_proc, n_jobs_per_proc, len_job))
 
         count = 0
 
         for i in range(n_proc):
 
-            for j in range(n_extra_jobs + 1):
+            for j in range(n_jobs_per_proc):
 
                 if count < n_jobs:
                     job_list[i, j, :] = total_job_list[count, :]
