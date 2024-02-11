@@ -15,9 +15,75 @@
 
 import numpy as np
 import math
+import itertools
 
 import src.constants as const
 import src.phonopy_funcs as phonopy_funcs
+
+from pymatgen.core.structure import Structure
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+def get_kinematic_qkG(
+    filename,
+    m_chi,
+    threshold,
+    vE_vec,
+    mesh=[9, 9, 9],
+    shift=[0, 0, 0],
+    G_upper=6,
+    q_cart=True,
+    k_cart=False,
+    G_cart=False,
+):
+    """
+    Generate a mesh of q,K,G points in the BZ that satisfy the kinematic constraints
+    Args:
+        filename (str): Path to the POSCAR/CIF/etc. file for the structure
+        m_chi (float): Dark matter mass in eV
+        threshold (float): Minimum energy threshold in eV
+        vE_vec (list): Earth velocity vector in units of c
+        mesh (list): Number of k-points in each direction
+        shift (list): Shift of the mesh from the origin (0,0,0) for unshifted, (1, 1, 1) for half-shifted
+        G_upper (int): Maximum G vector considered is [G_upper, G_upper, G_upper]
+        q_cart (bool): Return q points in cartesian coordinates, false is fractional
+        k_cart (bool): Return k points in cartesian coordinates, false is fractional
+        G_cart (bool): Return G points in cartesian coordinates, false is fractional
+    Returns:
+        q (np.array): Array of q vectors that satisfy kinematic constraints. By default, 
+                      in cartesian coordinates in units of eV
+        k (np.array): Array of k vectors that satisfy kinematic constraints. By default,
+                      in fractional coordinates.
+        G (np.array): Array of G vectors that satisfy kinematic constraints. By default,
+                      in fractional coordinates.
+    """
+    # Generate a full mesh spanning entire BZ in fractional coords
+    struct = Structure.from_file(filename)
+    sga = SpacegroupAnalyzer(struct)
+    kmesh_frac, _ = sga.get_ir_reciprocal_mesh_map(mesh=mesh, is_shift=shift)
+    # Define transformatin matrix from fractional to cartesian coordinates in BZ
+    frac_to_cart = struct.lattice.reciprocal_lattice.matrix / const.Ang_To_inveV
+    # Need a better way to automatically determine the maximum G value
+    # See blue notebook P. 21 for attempt
+    G_candidates = np.array(list(itertools.product(np.arange(G_upper), repeat=3)))
+    # Where does this expression come from?
+    # q_max = 2*m_chi/(VESC + VE) # Maximum q value
+    # Generate all possible q, k, G combinations in fractional and cartesian coordinates
+    qkG_frac = np.array(
+        [(k_frac + G_frac, k_frac, G_frac) for G_frac in G_candidates for k_frac in kmesh_frac]
+    )
+    qkG_cart = np.array([
+        (np.dot(q_frac, frac_to_cart), np.dot(k_frac, frac_to_cart), np.dot(G_frac, frac_to_cart))
+        for q_frac, k_frac, G_frac in qkG_frac
+    ])
+    # Apply kinematic constraints
+    q_norm = np.linalg.norm(qkG_cart[:, 0], axis=1)
+    v_star = (1/q_norm)*np.abs(np.dot(qkG_cart[:, 0], vE_vec) + q_norm**2/(2*m_chi))
+    mask = np.array((q_norm > (threshold / (const.VE + const.VESC))) & (v_star < const.VESC))
+
+    q = qkG_cart[mask][:, 0] if q_cart else qkG_frac[mask][:, 0]
+    k = qkG_cart[mask][:, 1] if k_cart else qkG_frac[mask][:, 1]
+    G = qkG_cart[mask][:, 2] if G_cart else qkG_frac[mask][:, 2]
+    return q, k, G
 
 def y_func(a, power_a, special_mesh_option, threshold, q_max, delta):
 
@@ -181,7 +247,8 @@ def create_q_mesh(mass, threshold, vE_vec, numerics_parameters, phonon_file, ato
     q_cut_option        = numerics_parameters['q_cut']
     special_mesh_option = numerics_parameters['special_mesh']
 
-    if q_cut_option:
+    # phonon_file None is a temporary workaround for magnons
+    if q_cut_option and phonon_file is not None:
         q_cut = compute_q_cut(phonon_file, atom_masses)
         q_max = min(2*mass*(const.VESC + const.VE), q_cut)
     else:
@@ -331,6 +398,23 @@ def generate_k_red_mesh_from_q_XYZ_mesh(q_XYZ_mesh, recip_red_to_XYZ):
 
     return np.array(k_mesh) 
 
+def generate_k_XYZ_mesh_from_q_XYZ_mesh(q_XYZ_mesh, recip_red_to_XYZ):
+    """
+        Takes in a q mesh and returns the k mesh in reduced coordinates to be fed in to phonopy.
+    """
+
+    k_mesh = []
+
+    for q in range(len(q_XYZ_mesh)):
+
+        q_vec = q_XYZ_mesh[q]
+
+        [k_vec, G_vec] = get_kG_from_q_XYZ(q_vec, recip_red_to_XYZ)
+
+        k_mesh.append(np.matmul(recip_red_to_XYZ, k_vec))
+
+    return np.array(k_mesh) 
+
 def get_G_XYZ_list_from_q_XYZ_list(q_XYZ_list, recip_red_to_XYZ):
     """
         Returns the list of G vectors given a list of q vectors.
@@ -349,3 +433,23 @@ def get_G_XYZ_list_from_q_XYZ_list(q_XYZ_list, recip_red_to_XYZ):
         G_XYZ_list.append(np.matmul(recip_red_to_XYZ, G_red_vec))
 
     return np.array(G_XYZ_list)
+
+def get_G_red_list_from_q_XYZ_list(q_XYZ_list, recip_red_to_XYZ):
+    """
+        Returns the list of G vectors given a list of q vectors.
+    """
+
+    n_q = len(q_XYZ_list)
+
+    G_XYZ_list = []
+
+    for q in range(n_q):
+
+        q_vec = q_XYZ_list[q]
+
+        [k_vec, G_red_vec] = get_kG_from_q_XYZ(q_vec, recip_red_to_XYZ)
+
+        G_XYZ_list.append(G_red_vec)
+
+    return np.array(G_XYZ_list)
+

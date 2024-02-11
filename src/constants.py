@@ -37,7 +37,9 @@ kmet_per_sec_to_none     = 3.34*10**(-6)
 ALPHA_EM                 = 1.0/137.0
 
 # dark matter density
-RHO_DM                   = 0.4*GeV_To_eV*invcmet_To_eV**3
+#RHO_DM                   = 0.4*GeV_To_eV*invcmet_To_eV**3
+# This is the magnon value
+RHO_DM                   = 0.3*GeV_To_eV*invcmet_To_eV**3
 
 # 1 kg x year exposure
 KG_YR                    = 2.69*10**58
@@ -46,9 +48,13 @@ KG_YR                    = 2.69*10**58
 THETA_E                  = 42*(PI/180)
 
 # Maxwell Boltzmann velocity distribution parameters
-V0   = 230*kmet_per_sec_to_none
+#V0   = 230*kmet_per_sec_to_none
+#VE   = 240*kmet_per_sec_to_none
+#VESC = 600*kmet_per_sec_to_none
+# These are the magnon values
+V0   = 220*kmet_per_sec_to_none
 VE   = 240*kmet_per_sec_to_none
-VESC = 600*kmet_per_sec_to_none
+VESC = 500*kmet_per_sec_to_none
 
 N0 = PI**(3/2)*V0**2*(V0*special.erf(VESC/V0) - (2/np.sqrt(PI))*VESC*np.exp(-VESC**2/V0**2))
 C1 = PI*V0**2/N0
