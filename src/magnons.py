@@ -29,11 +29,11 @@ def prepare_YIG_structure(filename):
 def get_T(D):
     N = len(D) // 2
     g = np.diag([1]*N + [-1]*N)
+
     # We want D = K^dagger K whereas numpy uses K K^dagger
     K = np.conjugate(np.linalg.cholesky(D)).T
     L, U = np.linalg.eig(K @ g @ np.conjugate(K).T)
-    #L = np.diag(L)
-    #L = np.linalg.inv(U) @ K @ g @ np.conjugate(K).T @ U
+
     # Arrange so that the first N are positive
     # And last N are negatives of the first N 
     # (see Eq. I4 in Tanner's Dissertation)
@@ -41,17 +41,15 @@ def get_T(D):
     sort_order = np.concatenate((sort_order[:N], sort_order[2*N:N-1:-1]))
     U = U[:, sort_order]
     L = np.diag(L[sort_order])
-    #L = np.linalg.inv(U) @ K @ g @ np.conjugate(K).T @ U
-    #plt.imshow(np.real(L))
-    #plt.colorbar()
 
     # Now E is 1/2*diag([omega_1, omega_2, ..., omega_N,
     #                    omega_1, omega_2, ..., omega_N])
     # See Eq. (I4) in Tanner's Dissertation
     E = g @ L
+    omega = 2*np.diag(np.real(E[:N])) 
     T = np.linalg.inv(K) @ U @ np.sqrt(E)
-    
-    return T
+
+    return omega, T
 
 def get_magnon_eig(hamiltonian, k, G):
     """
@@ -61,7 +59,7 @@ def get_magnon_eig(hamiltonian, k, G):
     """
     dispersion = MagnonDispersion(hamiltonian, phase_convention='tanner')
 
-    n = len(hamiltonian.magnetic_atoms)  # Number of magnetic atoms
+    n_atoms = len(hamiltonian.magnetic_atoms)  # Number of magnetic atoms
     # Atom positions in cartesian coordinates (units of 1/eV)
     xj = np.array(
         [
@@ -75,7 +73,7 @@ def get_magnon_eig(hamiltonian, k, G):
     # The rj vectors in cartesian coordinates (dimensionless?)
     rj = dispersion.u
 
-    omega_nu_k = dispersion.omega(k)
+    #omega_nu_k = dispersion.omega(k)
     # omega_nu_k, Tk = solve_via_colpa(dispersion.h(k))
     # _, inv_Tk = solve_via_colpa(dispersion.h(-k)/2)
     # See Colpa Eq. 3.7 for this inversion trick
@@ -85,9 +83,9 @@ def get_magnon_eig(hamiltonian, k, G):
     # Tk = np.linalg.inv(Tk) --> Slower way
 
     # See Tanner's Disseration and RadTools doc for explanation of the 1/2
-    Tk = get_T(dispersion.h(k)/2) 
-    Uk_conj = np.conjugate(Tk[:n, :n]) # This is U_{j,nu,k})*
-    V_minusk = np.conjugate(Tk[n:, :n]) # This is ((V_{j,nu,-k})*)*
+    omega_nu_k, Tk = get_T(dispersion.h(k)/2) 
+    Uk_conj = np.conjugate(Tk[:n_atoms, :n_atoms]) # This is U_{j,nu,k})*
+    V_minusk = np.conjugate(Tk[n_atoms:, :n_atoms]) # This is ((V_{j,nu,-k})*)*
 
     # Getting it with the other matrix since U and V are weird
     # Tk = get_T(dispersion.h(-k)/2)
@@ -102,22 +100,23 @@ def get_magnon_eig(hamiltonian, k, G):
     #    )
     #    * np.exp(1j * np.dot(G, xj.T)[:, np.newaxis])
     # )
-    epsilon_nu_k_G = np.zeros((n, 3), dtype=complex)
+    epsilon_nu_k_G = np.zeros((n_atoms, 3), dtype=complex)
 
     # If you use G and x in fractional coords, you need a factor of 2*pi
     # in the phase. Proof: the factor of 2*pi in the definition of b_{1,2,3}
-    for nu in range(n):
-        # Not sure if V and U are j,nu or nu,j...
-        for j in range(n):
-            epsilon_nu_k_G[nu, :] += (
-                np.sqrt(spins[j] / 2)
-                * (V_minusk[j, nu] * np.conjugate(rj[j]) + Uk_conj[j, nu] * rj[j])
-                * np.exp(1j * np.dot(G, xj[j]))
-            )
-    # Check for imaginary part of omega_nu_k
-    if np.any(np.imag(omega_nu_k) > 1e-5):
-        print("Imaginary part of omega_nu_k is too large at k = ", k)
-    return np.real(omega_nu_k[:n]), epsilon_nu_k_G  # nx3 array of complex numbers
+    # This should be rewritten with numpy broadcasting
+    #for nu in range(n_atoms):
+    #    # Not sure if V and U are j,nu or nu,j...
+    #    for j in range(n_atoms):
+    #        epsilon_nu_k_G[nu, :] += (
+    #            np.sqrt(spins[j] / 2)
+    #            * (V_minusk[j, nu] * np.conjugate(rj[j]) + Uk_conj[j, nu] * rj[j])
+    #            * np.exp(1j * np.dot(G, xj[j]))
+    #        )
+    prefactor = np.sqrt(spins / 2) * np.exp(1j * np.dot(xj, G))
+    epsilon_nu_k_G = (prefactor[:, None] * V_minusk).T @ np.conjugate(rj) + (prefactor[:, None] * Uk_conj).T @ rj
+
+    return omega_nu_k, epsilon_nu_k_G  # n, and nx3 array of complex numbers
 
 
 def get_YIG_hamiltonian(filename):
