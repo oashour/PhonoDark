@@ -4,6 +4,7 @@
 
 from scipy import special
 import numpy as np
+from numpy import linalg as LA
 import math
 
 import src.phonopy_funcs as phonopy_funcs
@@ -131,6 +132,7 @@ def calc_diff_rates_magnon(mass,
         Computes the differential rate
     """
 
+    q_XYZ_list = np.array(q_XYZ_list)
     mu_tilde_e = 1.0 # Half the lande g-factor
 
     n_a = numerics_parameters['n_a']
@@ -138,66 +140,92 @@ def calc_diff_rates_magnon(mass,
     n_c = numerics_parameters['n_c']
     energy_bin_width = numerics_parameters['energy_bin_width']
     
-    threshold     = physics_parameters['threshold']
+    #threshold     = physics_parameters['threshold']
     m_cell = 2749.367e9 # YIG mass, all ions
+    #m_cell = 821.5e9 # For VBTS
     #m_cell = 52.45e9 # YIG, Fe3+ only
     # idk how to set this for magnons tbh, just a max magnon energy * 4
     max_delta_E = 4*90e-3
-    max_bin_num = math.floor((max_delta_E-threshold)/energy_bin_width) + 1
+    max_bin_num = math.floor((max_delta_E)/energy_bin_width) + 1
 
     n_ions = len(hamiltonian.magnetic_atoms)
     n_q = len(q_XYZ_list)
 
     diff_rate = np.zeros(max_bin_num, dtype=complex)
     binned_rate = np.zeros(n_ions, dtype=complex)
-    #sigma_nu_q = np.zeros((n_q, n_ions))
     omegas = np.zeros((n_q, n_ions))
     epsilons = np.zeros((n_q, n_ions, 3), dtype=complex)
 
-    # the k in T(k) used in the eigenvector is in reduced coordinates
-    # But the r vectors are in cartesian coordinates to epsilon is sort of mixed
-    # How does T(k) transform as you transform k from reduced to cartesian coordinates?
     model_name = physics_parameters['model_name']
+
+    def sigma_mdm(q, epsilons):
+        # Eq (65) in arXiv:2009.13534
+        qhat = q/np.linalg.norm(q, axis=1)[:, None]
+        n_q, n_modes = epsilons.shape[0], epsilons.shape[1]
+        identity = np.tile(np.eye(3)[None, :, :], (n_q, n_modes, 1, 1))
+        matrix = identity - np.tile(np.einsum('ij,ik->ijk', qhat, qhat)[:,None,:,:], (1, n_modes, 1, 1))
+        sigma = LA.norm(np.matmul(matrix, 2*mu_tilde_e*epsilons[..., None]), axis=-2) ** 2
+        return sigma[:, :, 0]
+
+    def sigma_ap(q, epsilons):
+        # Eq (66) in arXiv:2009.13534
+        tiled_q = np.tile(q[None, :, :], (epsilons.shape[1], 1, 1)).swapaxes(0, 1)
+        return LA.norm(np.cross(tiled_q, 2*mu_tilde_e*epsilons), axis=2)**2
+
+    # TODO: implement this without a loop?
     for iq, (q, G, k) in enumerate(zip(q_XYZ_list, G_XYZ_list, k_XYZ_list)):
-        if iq % 100 == 0:
+        if iq % 1000 == 0:
             print(f"* m_chi = {mass:13.4f}, q-point: {iq:6d}/{n_q:6d})")
         omegas[iq, :], epsilons[iq, :, :] = get_magnon_eig(hamiltonian, k, G)
-        qhat = q/np.linalg.norm(q)
+    
+    # Along with omega and epsilons, these are all q*nu arrays
+    bin_num = np.floor((omegas)/energy_bin_width).astype(int)
+    g0_val = vel_g_function_integrals.matrix_g0(q_XYZ_list, omegas, mass, vE_vec)
+    if model_name == "mdm":
+        sigma_nu_q = sigma_mdm(q_XYZ_list, epsilons)
+    elif model_name == "ap":
+        sigma_nu_q = sigma_ap(q_XYZ_list, epsilons)
+    tiled_jacob = np.tile(jacob_list, (n_ions, 1)).T
+    delta_rate = (
+        (1/m_cell) * (const.RHO_DM/mass) * 
+        (2*const.PI)**(-3)*tiled_jacob *
+        (1.0/(n_a*n_b*n_c)) * 
+        sigma_nu_q * g0_val
+        )
+
+    # This is 
         #sigma_nu_q[iq, :] = prefactor * np.linalg.norm((np.eye(3) - np.outer(qhat, qhat)) @ (2 * mu_tilde_e * epsilon.T), axis=0) ** 2
     # Should exit this loop here, and then use numpy broadcasting for the rest
     # Write a numpy vectorized function for g0/g1/g2 -> You get g0[q, nu], etc.
     # You also have omega[q,nu] and epsilon[q,nu,xyz] and q_XYZ[q]
-        for nu in range(n_ions):
-            energy_diff = omegas[iq, nu]
+        #for nu in range(n_ions):
+        #    energy_diff = omegas[iq, nu]
             # only omega, not omega_knu-omega_q goes into the g0_func, actually
-            if energy_diff >= threshold:
-                v_star_val = vel_g_function_integrals.v_star_func(q, energy_diff, mass, vE_vec)
-                v_minus_val = np.abs(v_star_val)
+            #if energy_diff >= threshold: # should get rid of threshold and rebin in post-processing
+            #v_star_val = vel_g_function_integrals.v_star_func(q, energy_diff, mass, vE_vec)
+            #v_minus_val = np.abs(v_star_val)
 
-                g0_val = vel_g_function_integrals.g0_func_opt(q, energy_diff, mass, 
-                                            vE_vec, v_minus_val)
-                #g0_val = vel_g_function_integrals.g0_func(q, energy_diff, mass, vE_vec)
-                bin_num = math.floor((energy_diff-threshold)/energy_bin_width)
-                if v_minus_val < const.VESC:
-                    if model_name == "mdm":
-                        sigma = np.linalg.norm(
-                            (np.eye(3) - np.outer(qhat, qhat)) @ 
-                            (2 * mu_tilde_e * epsilons[iq, nu])
-                            ) ** 2 # magnetic dipole
-                    elif model_name == "ap":
-                        sigma = np.linalg.norm(
-                            np.cross(q, 2 * mu_tilde_e * epsilons[iq, nu])
-                        ) ** 2 # anapole
-                    delta_rate = (
-                        (1/m_cell) * (const.RHO_DM/mass) * 
-                        (2*const.PI)**(-3)*jacob_list[iq] *
-                        (1.0/(n_a*n_b*n_c)) * 
-                        sigma * g0_val
-                        )
+            #g0_val = vel_g_function_integrals.g0_func_opt(q, energy_diff, mass, 
+            #                            vE_vec, v_minus_val)
+            #g0_val = vel_g_function_integrals.g0_func(q, energy_diff, mass, vE_vec)
+            #bin_num = math.floor((energy_diff-threshold)/energy_bin_width)
+            ##if v_minus_val < const.VESC:
+            #if model_name == "mdm":
+            #    sigma = np.linalg.norm(
+            #        (np.eye(3) - np.outer(qhat, qhat)) @ 
+            #        (2 * mu_tilde_e * epsilons[iq, nu])
+            #        ) ** 2 # magnetic dipole
+            #elif model_name == "ap":
+            #    sigma = np.linalg.norm(
+            #        np.cross(q, 2 * mu_tilde_e * epsilons[iq, nu])
+            #    ) ** 2 # anapole
 
-                    binned_rate[nu] += delta_rate
-                    diff_rate[bin_num] += delta_rate
+            #binned_rate[nu] += delta_rate
+            #diff_rate[bin_num] += delta_rate
 
+    diff_rate = np.zeros(max_bin_num)
+    np.add.at(diff_rate, bin_num, delta_rate)
+    binned_rate = np.sum(delta_rate, axis=0)
     total_rate = sum(diff_rate)
 
     return [diff_rate, binned_rate, total_rate]
